@@ -1,0 +1,9 @@
+{
+  "name": "reels-workspace",
+  "private": true,
+  "description": "Capture and SFX scripts shared by every reel; each reel is a copy of template/.",
+  "devDependencies": {
+    "dotenv": "^16.4.5",
+    "playwright": "^1.56.1"
+  }
+}

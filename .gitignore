@@ -1,0 +1,11 @@
+node_modules/
+out/
+.env
+.auth.json
+sfx-raw/
+*.wav
+*.mp4
+*.MP4
+*.mov
+*.MOV
+.DS_Store
