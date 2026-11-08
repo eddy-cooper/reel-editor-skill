@@ -1,18 +1,67 @@
-"""Cut a raw 4K talking-head clip to the clean takes, close pauses, crop for the bottom panel.
+"""Cut a raw talking-head clip to the clean takes, close pauses, crop for the bottom panel.
 
-Run from the reel folder: uv run --no-project --with numpy --with soundfile python analysis/cut.py <clip.MP4>
+Works with landscape camera footage (e.g. 4K 3840x2160) and portrait phone footage (e.g. iPhone 1080x1920
+or 2160x3840, any frame rate, HDR or SDR). The source size, rotation and HDR are read with ffprobe.
+
+Run from the reel folder: uv run --no-project --with numpy --with soundfile python analysis/cut.py <clip>
+Preview the crop first:   uv run --no-project --with numpy --with soundfile python analysis/cut.py <clip> --preview
+  (writes analysis/crop-preview.png: 4 frames across the clip with the panel crop drawn in red; tune HEAD_X / HEAD_Y)
 Needs analysis/audio16k.wav and analysis/transcript.json (see transcribe.py).
 Writes public/talk-cut.mov and public/words.json (times on the cut timeline).
-KEEP, FIX, ONSET, CROP_X, GRADE and the gate are per clip; the values below are a worked example.
+KEEP, FIX, ONSET, HEAD_X/HEAD_Y, GRADE and the gate are per clip; the values below are a worked example.
 """
 import json, subprocess, sys
 import numpy as np, soundfile as sf
 
 SRC = sys.argv[1]
-FPS = 25
-CROP_W = 2333  # 1080x1000 panel: 2333x2160 of the 4K frame (v1 was 2084 for 1080x1120)
-CROP_X = 2000 - CROP_W // 2  # head centred at about x = 2000 of 3840
+FPS = 25  # output grid; the source is resampled to it first, so 30/60 fps and variable-rate phone clips stay in sync
+PANEL_W, PANEL_H = 1080, 1000  # bottom speaker panel (1920 - PANEL_H in src/props6.tsx)
+# Where the speaker's head sits, as fractions of the (upright) frame. The crop is centred on it and clamped to the frame.
+#   Landscape: the crop is full height and slides in x (HEAD_X; 2000/3840 was the worked example). HEAD_Y is ignored.
+#   Portrait:  the crop is full width and slides in y (HEAD_Y; ~0.40 frames head and shoulders). HEAD_X is ignored.
+HEAD_X = 2000 / 3840
+HEAD_Y = 0.40
 GRADE = "eq=contrast=1.02:saturation=1.03"  # bright, even room: no lift needed
+
+
+def probe(src):
+    """Upright width, height, transfer and duration. Phones store portrait as landscape + a rotation flag."""
+    r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+                        "stream=width,height,color_transfer:stream_tags=rotate:stream_side_data=rotation:format=duration",
+                        "-of", "json", src], capture_output=True, text=True, check=True)
+    j = json.loads(r.stdout)
+    s = j["streams"][0]
+    rot = int(float(s.get("tags", {}).get("rotate", 0)))
+    for d in s.get("side_data_list", []):
+        if "rotation" in d: rot = int(float(d["rotation"]))
+    w, h = s["width"], s["height"]
+    if abs(rot) % 180 == 90: w, h = h, w  # ffmpeg auto-rotates on decode, so crop in upright coordinates
+    return w, h, s.get("color_transfer", ""), float(j["format"]["duration"])
+
+
+SRC_W, SRC_H, TRC, SRC_DUR = probe(SRC)
+if SRC_W / SRC_H >= PANEL_W / PANEL_H:  # landscape: full height (3840x2160 -> 2333x2160)
+    CROP_H, CROP_W = SRC_H, round(SRC_H * PANEL_W / PANEL_H)
+else:  # portrait: full width (1080x1920 -> 1080x1000, 2160x3840 -> 2160x2000)
+    CROP_W, CROP_H = SRC_W, round(SRC_W * PANEL_H / PANEL_W)
+CROP_W -= CROP_W % 2; CROP_H -= CROP_H % 2
+CROP_X = min(max(0, round(HEAD_X * SRC_W - CROP_W / 2)), SRC_W - CROP_W)
+CROP_Y = min(max(0, round(HEAD_Y * SRC_H - CROP_H / 2)), SRC_H - CROP_H)
+# iPhones record HDR (HLG / Dolby Vision) by default. Without a tone map it comes out flat and grey in SDR.
+# Needs ffmpeg with zscale (the gyan.dev / winget Gyan.FFmpeg build has it). Re-check GRADE after the tone map.
+HDR = TRC in ("arib-std-b67", "smpte2084")
+TONEMAP = ("zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=hable:desat=0,"
+           "zscale=t=bt709:m=bt709:r=tv,format=yuv420p,") if HDR else ""
+print(f"source {SRC_W}x{SRC_H}{' HDR' if HDR else ''} -> crop {CROP_W}x{CROP_H} at ({CROP_X},{CROP_Y}) -> {PANEL_W}x{PANEL_H}")
+
+if "--preview" in sys.argv:
+    step = max(SRC_DUR / 4, 0.5)
+    vf = (f"fps=1/{step:.3f},{TONEMAP}drawbox=x={CROP_X}:y={CROP_Y}:w={CROP_W}:h={CROP_H}:color=red:t={max(4, SRC_W // 200)},"
+          f"scale=-2:720,tile=4x1")
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-ss", f"{step / 2:.3f}", "-i", SRC, "-vf", vf, "-frames:v", "1",
+                    "analysis/crop-preview.png"], check=True)
+    print("wrote analysis/crop-preview.png")
+    sys.exit(0)
 # Clean takes, in source seconds (by word start). Dropped: "Let's start with big tutoring, C tier" (retaken)
 # and the aside "Is that too pluggy?".
 KEEP = [
@@ -94,11 +143,13 @@ for s, e in segs:
 segs = merged
 
 sel = "+".join(f"between(t,{s:.3f},{e - 0.001:.3f})" for s, e in segs)
-v = f"[0:v]select='{sel}',setpts=N/FRAME_RATE/TB,crop={CROP_W}:2160:{CROP_X}:0,scale=1080:1000:flags=lanczos,{GRADE}[v]"
+v = (f"[0:v]fps={FPS},select='{sel}',setpts=N/FRAME_RATE/TB,crop={CROP_W}:{CROP_H}:{CROP_X}:{CROP_Y},"
+     f"scale={PANEL_W}:{PANEL_H}:flags=lanczos,{TONEMAP}{GRADE}[v]")
 aparts = []
 for i, (s, e) in enumerate(segs):
     d = e - s
-    aparts.append(f"[0:a]atrim={s:.3f}:{e:.3f},asetpts=PTS-STARTPTS,afade=t=in:d=0.012,afade=t=out:st={max(0, d - 0.015):.3f}:d=0.015[a{i}]")
+    # first audio track only: newer iPhones add a spatial-audio (APAC) track that ffmpeg may not decode
+    aparts.append(f"[0:a:0]atrim={s:.3f}:{e:.3f},asetpts=PTS-STARTPTS,afade=t=in:d=0.012,afade=t=out:st={max(0, d - 0.015):.3f}:d=0.015[a{i}]")
 acat = "".join(f"[a{i}]" for i in range(len(segs))) + f"concat=n={len(segs)}:v=0:a=1[ar];[ar]highpass=f=80,afftdn=nf=-30,acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=2,loudnorm=I=-15:TP=-2:LRA=7,aresample=48000[a]"
 fc = ";".join([v] + aparts) + ";" + acat
 subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", SRC, "-filter_complex", fc, "-map", "[v]", "-map", "[a]",

@@ -1,6 +1,6 @@
 ---
 name: reel-editor
-description: Edit raw talking-head camera footage (a 4K landscape clip) into a vertical 1080x1920 Instagram or TikTok reel, such as a study-method tier list, in the VCE Hub split layout. A board, props and real screen clips sit on top and the speaker below. The pipeline is a faster-whisper cut of the clean takes, a Remotion timeline, SFX, word-timed captions and constant motion. Use when asked to edit, cut or make a reel or promo video from a clip, or to redo or tweak one.
+description: Edit raw talking-head footage (a 4K landscape camera clip or a portrait phone clip, e.g. iPhone .mov) into a vertical 1080x1920 Instagram or TikTok reel, such as a study-method tier list, in the VCE Hub split layout. A board, props and real screen clips sit on top and the speaker below. The pipeline is a faster-whisper cut of the clean takes, a Remotion timeline, SFX, word-timed captions and constant motion. Use when asked to edit, cut or make a reel or promo video from a clip, or to redo or tweak one.
 argument-hint: "<clip path> [notes]"
 ---
 
@@ -14,8 +14,10 @@ The `workspace/` folder next to this file is the starting point. If `$REELS_DIR`
 
 1. Copy it with `cp -R <this skill's folder>/workspace "$REELS_DIR"`. Then run `npm install` in `$REELS_DIR` (Playwright and dotenv for the capture scripts) and in `$REELS_DIR/template` (Remotion).
 2. Run `cp .env.example .env` and ask the person to fill it in. It needs the site URL and a **dedicated test account** for screen clips, plus an ElevenLabs key for the SFX. They edit `.env` themselves. Never ask for secrets in the chat.
-3. Run `python3 scripts/sfx.py` once. It writes the SFX set to `template/public/sfx/`.
+3. Run `uv run --no-project python scripts/sfx.py` once. It writes the SFX set to `template/public/sfx/`.
 4. Tools: ffmpeg and ffprobe, poppler (`pdftoppm`, `pdftotext`), `uv` for the Python steps, and Node 20 or later. Run `npx playwright install chromium` once for captures.
+
+**On Windows:** run the shell steps in Git Bash (the Bash tool), so `cp -R`, `./render.sh` and `$REELS_DIR` work as written. `~/reels` is `C:\Users\<you>\reels`. Don't call `python3`, because it's often the Microsoft Store stub; use `uv run ... python`. Install the tools with winget: `Gyan.FFmpeg` (includes `zscale` for the HDR tone map), `astral-sh.uv`, `oschwartz10612.Poppler`. Then open a new terminal so they're on PATH.
 
 `template/src/Reel.tsx` is a worked example (a study-method tier list), and its media isn't included. Every reel rewrites it.
 
@@ -23,7 +25,7 @@ The `workspace/` folder next to this file is the starting point. If `$REELS_DIR`
 
 - **Top safe zone.** Reels and TikTok lay their header over roughly the top 1 cm, about 170 px of the 1920 frame. Nothing that matters may sit there: titles, highlighted lines, cards, clocks or graphs. The top panel still bleeds to the edge, but frame the content in the band from 170 to 800, using `SAFE_TOP` and `VIEW_CY` from `src/props6.tsx`, which `PageView`, `ClipPanel` and `Drift` centre on. Check stills with a red line drawn at y=170.
 - **No text cards.** Don't pull quotes into cards over the page. For legibility, zoom the camera onto the highlighted line on the real page: about 1.5–1.75x for a short line, and as far as the line's width allows for a long one. Don't re-typeset the text.
-- **Layout.** The top panel is 1080x920 (`PANEL_H`) and shows the board, props and site clips. With the 170 px safe zone, 750 px of it is visible. The speaker panel below is 1080x1000, cropped 2333x2160 from the 4K frame with no matte. An 800/1120 split read speaker-heavy once the safe zone ate the top. A 6 px ink rule separates the panels.
+- **Layout.** The top panel is 1080x920 (`PANEL_H`) and shows the board, props and site clips. With the 170 px safe zone, 750 px of it is visible. The speaker panel below is 1080x1000 with no matte. From a 4K landscape frame that's a 2333x2160 crop. From a portrait phone frame it's the full width and a 1.08:1 band around the head (1080x1000 of 1080x1920, or 2160x2000 of 2160x3840). `cut.py` works this out from ffprobe. An 800/1120 split read speaker-heavy once the safe zone ate the top. A 6 px ink rule separates the panels.
 - **Tier board.** Copy the TierMaker look: page `#242222`, rows `#1a1a17`, a black control column with a gear and up/down chevrons, and coloured label cells S `#ef8683`, A `#f5c28b`, B `#fae08d`, C `#ffff91`, D `#cdfd8f` with dark letters. Show all five tiers even if D stays empty. Items are square tiles with a label strip. Use a real UI crop where the item is part of the product. Each item gets picked up (big, centred, cursor gripping, wobbling), then dragged into its row, landing on the spoken tier letter.
 - **Always motion.** Nothing on screen is static:
   - Every top segment settles in (spring, 1.07 to 1) and then creeps forward (`Drift`).
@@ -47,14 +49,15 @@ If the speaker re-records a script you've already edited (because of bad light, 
 ## Pipeline
 
 1. **Scaffold.** Run `cp -R "$REELS_DIR/template" "$REELS_DIR/reel-NN"`. Copying `node_modules` is faster than npm and works offline.
-2. **Transcribe.** Extract 16 kHz mono audio (`ffmpeg -i <clip> -ac 1 -ar 16000 analysis/audio16k.wav`), then run `uv run --no-project --with faster-whisper python analysis/transcribe.py analysis/audio16k.wav analysis/transcript.json`. This uses medium.en with VAD, and the first run downloads the model. Print it as lines with start times to find the retakes.
+2. **Transcribe.** Extract 16 kHz mono audio (`ffmpeg -i <clip> -map 0:a:0 -ac 1 -ar 16000 analysis/audio16k.wav`; the `-map` keeps ffmpeg off an iPhone's spatial-audio track), then run `uv run --no-project --with faster-whisper python analysis/transcribe.py analysis/audio16k.wav analysis/transcript.json`. This uses medium.en with VAD, and the first run downloads the model. Print it as lines with start times to find the retakes.
 3. **Cut** with `analysis/cut.py`, run as `uv run --no-project --with numpy --with soundfile python analysis/cut.py <clip>`:
    - `KEEP` lists source windows for the last clean take of each line. Speakers restart lines a lot, so the last complete take is usually the one.
    - Whisper stretches word starts over silence and breaths. The script snaps long words to their first voiced frame and splits out any internal run below the gate (−31 to −34 dB, set from the room's noise floor) for more than 0.3 s.
    - `ONSET` pins the odd word where a blip sits at the stretched start. Find those by printing 50 ms RMS around the word.
    - Split a `KEEP` window around a long breath.
    - Cut points snap to the 25 fps grid, so the video `select` and the audio `atrim`s stay in sync.
-   - Set the crop (`CROP_X`) from a contact sheet so the head is centred. Also set the grade (`eq=gamma=1.18:saturation=1.06:contrast=1.03` suits a dim room, and a bright room needs almost none).
+   - Set the crop so the head is centred. Run `cut.py <clip> --preview` first. It needs no transcript and writes `analysis/crop-preview.png`, four frames with the panel crop in red. For landscape footage, tune `HEAD_X`. For portrait phone footage, tune `HEAD_Y` (about 0.35–0.45; the head should sit in the upper part of the box, below where the captions go at the top of the panel). The script prints the source size, whether it's HDR, and the crop.
+   - **Phone footage:** frame rate (30/60 fps or variable) is resampled to 25 fps before the cut. HDR (the iPhone default) is tone-mapped to SDR automatically. Look at the result before setting the grade, since it often needs a little lift (`eq=gamma=1.05`). If ffmpeg reports no `zscale`, install the full gyan.dev build, or turn HDR off on the phone. Also set the grade (`eq=gamma=1.18:saturation=1.06:contrast=1.03` suits a dim room, and a bright room needs almost none).
    - `FIX` corrects whisper's spellings: acronyms it mishears (VCAR→VCAA), split numbers ("99" ".95"→99.95), lowercase "tier", and a period before "Easy" so the captions break right.
    - End every `KEEP` window about 0.3 s past its last word's **end**, never at its start. Cutting at the start clips the last word. Print each window's tail room before cutting.
    - A fast retake right after a stopped line can vanish into whisper's VAD. Watch for speech-level RMS with no words. Re-transcribe that slice with `vad_filter=False` and patch the words into `transcript.json`, keeping `transcript_raw.json`.

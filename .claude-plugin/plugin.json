@@ -1,9 +1,9 @@
 {
   "name": "reel-editor",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Edit raw talking-head footage into a vertical 1080x1920 reel with Remotion: whisper cut, board and props on top, speaker below, captions, SFX.",
   "author": { "name": "whelephant" },
-  "repository": "https://github.com/whelephant/reel-editor-skill",
+  "repository": "https://github.com/eddy-cooper/reel-editor-skill",
   "license": "MIT",
   "keywords": ["video", "reels", "remotion", "skill"]
 }

@@ -9,14 +9,14 @@ You give Claude a clip. It transcribes it with faster-whisper, cuts the clean ta
 As a plugin, from inside Claude Code:
 
 ```
-/plugin marketplace add whelephant/reel-editor-skill
+/plugin marketplace add eddy-cooper/reel-editor-skill
 /plugin install reel-editor@reel-editor-skill
 ```
 
 Or copy the skill folder by hand:
 
 ```
-git clone https://github.com/whelephant/reel-editor-skill
+git clone https://github.com/eddy-cooper/reel-editor-skill
 cp -R reel-editor-skill/skills/reel-editor ~/.claude/skills/
 ```
 
@@ -37,7 +37,9 @@ cp -R reel-editor-skill/skills/reel-editor ~/.claude/skills/
 
 On first run the skill sets up a workspace at `$REELS_DIR` (default `~/reels`) from `skills/reel-editor/workspace/` and asks you to fill in `.env`. Each reel then gets its own folder, `reel-01`, `reel-02` and so on, copied from the template.
 
-The footage it expects is 4K landscape (3840x2160) with the speaker roughly centred. Other sizes work once you change the crop in `analysis/cut.py`.
+Footage can be 4K landscape (3840x2160) or portrait phone video (for example an iPhone `.mov`, 1080x1920 or 2160x3840). `analysis/cut.py` reads the size, rotation and HDR with ffprobe. It crops a 1080x1000 speaker panel centred on `HEAD_X` (landscape) or `HEAD_Y` (portrait), resamples to 25 fps and tone-maps iPhone HDR to SDR. Run `cut.py <clip> --preview` to see the crop before cutting.
+
+On Windows, run the shell steps in Git Bash and install the tools with `winget install Gyan.FFmpeg astral-sh.uv oschwartz10612.Poppler`.
 
 ## What's in it
 
